@@ -237,7 +237,7 @@ OptionParser.new do |opts|
     options[:aws_profile] = v
   end
 
-  opts.on("-b", "--bucket=ALB_S3_BUCKET", "ALB S3 Bucket") do |v|
+  opts.on("-b", "--bucket=ALB_S3_BUCKET", "ALB S3 Bucket and Path") do |v|
     options[:alb_s3_bucket] = v
   end
 
