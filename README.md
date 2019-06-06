@@ -35,3 +35,8 @@ Find all requests that took over 500ms to process in the last 12 hours.
 alblogs -b 's3://<my-aws-alb-bucket-name>/access_logs/AWSLogs/<aws-account-id>/elasticloadbalancing/<aws-region>' -s '12 hours' -o slow-requests.log --request-times-over 0.5
 ```
 
+### References
+
+AWS Documentaion: Access Logs for Your Application Load Balancer
+
+https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
