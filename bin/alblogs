@@ -1,0 +1,315 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'time'
+require 'shellwords'
+require 'json'
+
+def run_or_die(cmd)
+  res = `#{cmd}`
+  raise("command failed with #{$?}, #{cmd}") unless $?.success?
+  res
+end
+
+def parse_time_offset(str)
+  if str =~ /min/
+    str.sub(/ *min.*/, '').to_i * 60
+  elsif str =~ /hour/
+    str.sub(/ *hour.*/, '').to_i * 3600
+  elsif str =~ /day/
+    str.sub(/ *day.*/, '').to_i * 86400
+  else
+    nil
+  end
+end
+
+def time_ago(now, str)
+  if offset = parse_time_offset(str)
+    time = now - offset
+    time - (time.to_i % 60) # round to the start of the minute
+  else
+    Time.parse(str).utc
+  end
+end
+
+def get_s3_files(bucket, date_path, profile)
+  s3_url = "#{bucket}/#{date_path}/"
+  cmd = "aws"
+  cmd << " --profile #{Shellwords.escape(profile)}" if profile
+  cmd << " s3 ls #{Shellwords.escape(s3_url)}"
+  output = run_or_die(cmd)
+  output.split("\n").map do |line|
+    line =~ /(\d{4}\-\d{2}\-\d{2} \d{2}:\d{2}:\d{2}) +(\d+) +(.+)/
+    last_modified_at = Time.parse($1).utc
+    file_size = $2.to_i
+    file = $3
+    S3File.new("#{s3_url}#{file}", file_size, last_modified_at)
+  end
+end
+
+def get_s3_files_in_range(range, bucket, profile)
+  s3_files = {}
+  time = range.begin
+  while time < range.end
+    date_path = time.strftime('%Y/%m/%d')
+    get_s3_files(bucket, date_path, profile).each do |s3_file|
+      next unless s3_file.in_range?(range)
+      s3_files[s3_file.file] ||= s3_file
+    end
+    time += 86_400
+  end
+  s3_files
+end
+
+def download_s3_file(s3_file, dest, profile)
+  cmd = "aws"
+  cmd << " --profile #{Shellwords.escape(profile)}" if profile
+  cmd << " s3 cp #{Shellwords.escape(s3_file.file)} #{Shellwords.escape(dest)}.gz"
+  run_or_die(cmd)
+  cmd = "gzip -f -d #{Shellwords.escape(dest)}.gz"
+  run_or_die(cmd)
+end
+
+def alb_log_fields
+  @alb_log_fields ||=
+    begin
+      not_a_space = '([^ ]+)'
+      in_quotes = '"(.*?)"'
+      
+      {
+        type: not_a_space,
+        timestamp: not_a_space,
+        elb: not_a_space,
+        client_port: not_a_space,
+        target_port: not_a_space,
+        request_processing_time: not_a_space,
+        target_processing_time: not_a_space,
+        response_processing_time: not_a_space,
+        elb_status_code: not_a_space,
+        target_status_code: not_a_space,
+        received_bytes: not_a_space,
+        sent_bytes: not_a_space,
+        request: in_quotes,
+        user_agent: in_quotes,
+        ssl_cipher: not_a_space,
+        ssl_protocol: not_a_space,
+        target_group_arn: not_a_space,
+        trace_id: in_quotes,
+        domain_name: in_quotes,
+        chosen_cert_arn: in_quotes,
+        matched_rule_priority: not_a_space,
+        request_creation_time: not_a_space,
+        actions_executed: in_quotes,
+        redirect_url: in_quotes,
+        error_reason: in_quotes
+      }
+    end
+end
+
+def alb_log_fields_regex
+  @alb_log_fields_regex ||=
+    begin
+      Regexp.new alb_log_fields.values.join(' ')
+    end
+end
+
+def get_alb_log_fields(line)
+  matches  = alb_log_fields_regex.match(line).to_a
+  matches.shift
+  matches
+end
+
+def get_alb_log_entry(line)
+  entry = AlbLogEntry.new(*get_alb_log_fields(line))
+  entry.line = line
+  entry
+end
+
+def measure 
+  start = Time.now
+  yield
+  Time.now - start
+end
+  
+def display_stats(stats)
+  stats[:elapsed_time] = Time.now.utc - stats[:started_at]
+  $stderr.puts stats.inspect
+end
+
+class S3File
+  MINUTES_5 = 5 * 60
+
+  attr_reader :file,
+              :file_size,
+              :last_modified_at
+
+  def initialize(file, file_size, last_modified_at)
+    @file = file
+    @file_size = file_size
+    @last_modified_at = last_modified_at
+  end
+
+  def end_time
+    @end_time ||=
+      begin
+        unless @file =~ /_(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})Z_/
+          raise("unable to find time stamp in #{@file}")
+        end
+        Time.new($1, $2, $3, $4, $5, 0, 0)
+      end
+  end
+
+  def start_time
+    @start_time ||= (end_time - MINUTES_5)
+  end
+
+  def in_range?(range)
+    return false if end_time < range.begin
+    return false if start_time > range.end
+    true
+  end
+end
+
+class AlbLogEntry < Struct.new(*alb_log_fields.keys)
+  attr_accessor :line
+
+  def timestamp
+    @timestamp ||= Time.iso8601(self[:timestamp])
+  end
+
+  def target_processing_time
+    @target_processing_time ||= self[:target_processing_time].to_f
+  end
+end
+
+class RequestMatcher
+  attr_reader :range
+
+  def initialize(options)
+    @range = options[:start_time]..options[:end_time]
+    @exclude_filter = options[:exclude_filter]
+    @include_filter = options[:include_filter]
+    @request_times_over = options[:request_times_over]
+  end
+
+  def match?(entry)
+    return false unless @range.cover?(entry.timestamp)
+    return false if @include_filter && ! @include_filter.match?(entry.line)
+    return false if @exclude_filter && @exclude_filter.match?(entry.line)
+    return false if @request_times_over && @request_times_over > entry.target_processing_time
+    true
+  end
+end
+
+started_at = Time.now.utc
+
+options = {
+  start_time: time_ago(started_at, '30 min'),
+  end_time: started_at,
+  include_filter: nil,
+  exclude_filter: nil,
+  alb_s3_bucket: nil,
+  aws_profile: nil,
+  log_file: $stdout,
+  display_stats: false,
+  request_times_over: nil
+}
+OptionParser.new do |opts|
+  opts.banner = "Usage: alblogs [options]"
+
+  opts.on("-s", "--start=TIME_EXP", "Start time") do |v|
+    options[:start_time] = time_ago(started_at, v)
+  end
+
+  opts.on("-e", "--end=TIME_EXP", "End time") do |v|
+    options[:end_time] = time_ago(started_at, v)
+  end
+
+  opts.on("--include=REGEX", "Include filter") do |v|
+    options[:include_filter] = Regexp.new(v)
+  end
+
+  opts.on("--exclude=REGEX", "Exclude filter") do |v|
+    options[:exclude_filter] = Regexp.new(v)
+  end
+
+  opts.on("-p", "--profile=PROFILE", "AWS profile") do |v|
+    options[:aws_profile] = v
+  end
+
+  opts.on("-b", "--bucket=ALB_S3_BUCKET", "ALB S3 Bucket") do |v|
+    options[:alb_s3_bucket] = v
+  end
+
+  opts.on('-o', "--output=OUTPUT_FILE", 'File to stream matching ALB log entries to') do |v|
+    f = File.open(v, 'wb')
+    f.sync = true
+    options[:log_file] = f
+  end
+
+  opts.on("--stats", "Display Stats") do
+    options[:display_stats] = true
+  end
+
+  opts.on('--request-times-over=SECONDS', 'Find requests that took over X seconds') do |v|
+    options[:request_times_over] = v.to_f
+  end
+end.parse!
+
+raise("no bucket specified") unless options[:alb_s3_bucket]
+
+# just forgive the user and swap the values
+if options[:end_time] && options[:end_time] < options[:start_time]
+  $stderr.puts 'swapping start/end times'
+  options[:start_time], options[:end_time] = options[:end_time], options[:start_time]
+end
+
+request_matcher = RequestMatcher.new options
+
+stats = Hash.new(0)
+stats[:started_at] = started_at
+stats[:range_starts_at] = request_matcher.range.begin
+stats[:range_ends_at] = request_matcher.range.end
+stats[:min_log_time] = nil
+stats[:max_log_time] = nil
+stats[:min_matched_log_time] = nil
+stats[:max_matched_log_time] = nil
+
+tmp_file = '.download.alblogs.log'
+File.unlink(tmp_file) if File.exists?(tmp_file)
+File.unlink("#{tmp_file}.gz") if File.exists?("#{tmp_file}.gz")
+
+$stop = false
+trap("INT") { $stop = true }
+
+get_s3_files_in_range(request_matcher.range, options[:alb_s3_bucket], options[:aws_profile]).values.each do |s3_file|
+  stats[:files] += 1
+
+  stats[:total_download_time] += measure do
+    download_s3_file(s3_file, tmp_file, options[:aws_profile])
+  end
+
+  stats[:total_file_processing_time] += measure do
+    File.open(tmp_file, 'rb') do |f|
+      while(! f.eof? && ! $stop)
+        stats[:lines] += 1
+        line = f.readline
+        entry = get_alb_log_entry(line)
+        stats[:min_log_time] = ! stats[:min_log_time] || stats[:min_log_time] > entry.timestamp ? entry.timestamp : stats[:min_log_time]
+        stats[:max_log_time] = ! stats[:max_log_time] || stats[:max_log_time] < entry.timestamp ? entry.timestamp : stats[:max_log_time]
+        next unless request_matcher.match?(entry)
+        stats[:matching_lines] += 1
+        stats[:min_matched_log_time] = ! stats[:min_matched_log_time] || stats[:min_matched_log_time] > entry.timestamp ? entry.timestamp : stats[:min_matched_log_time]
+        stats[:max_matched_log_time] = ! stats[:max_matched_log_time] || stats[:max_matched_log_time] < entry.timestamp ? entry.timestamp : stats[:max_matched_log_time]
+        options[:log_file].puts line
+      end
+    end
+  end
+
+  File.unlink(tmp_file)
+
+  display_stats(stats) if options[:display_stats]
+  break if $stop
+end
+
+options[:log_file].close
