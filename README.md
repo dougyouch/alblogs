@@ -2,6 +2,16 @@
 
 Utility script for processing ALB access logs over a given time range
 
+### Requirements
+
+Need to have the AWS CLI installed.  Can be found here https://aws.amazon.com/cli/
+
+### Install
+
+```
+gem install alblogs
+```
+
 ### Usage
 
 ```
