@@ -6,17 +6,6 @@ require 'shellwords'
 require 'json'
 require 'alblogs'
 
-def measure 
-  start = Time.now
-  yield
-  Time.now - start
-end
-  
-def display_stats(stats)
-  stats[:elapsed_time] = Time.now.utc - stats[:started_at]
-  $stderr.puts stats.inspect
-end
-
 started_at = Time.now.utc
 
 options = {
@@ -81,52 +70,18 @@ if options[:end_time] && options[:end_time] < options[:start_time]
 end
 
 request_matcher = Alblogs::RequestMatcher.new options
-
-stats = Hash.new(0)
-stats[:started_at] = started_at
-stats[:range_starts_at] = request_matcher.range.begin
-stats[:range_ends_at] = request_matcher.range.end
-stats[:min_log_time] = nil
-stats[:max_log_time] = nil
-stats[:min_matched_log_time] = nil
-stats[:max_matched_log_time] = nil
-
-tmp_file = '.download.alblogs.log'
-File.unlink(tmp_file) if File.exists?(tmp_file)
-File.unlink("#{tmp_file}.gz") if File.exists?("#{tmp_file}.gz")
-
-$stop = false
-trap("INT") { $stop = true }
-
 s3_bucket = Alblogs::S3Bucket.new(options[:alb_s3_bucket], options[:aws_profile])
-s3_bucket.get_s3_files_in_range(request_matcher.range).values.each do |s3_file|
-  stats[:files] += 1
 
-  stats[:total_download_time] += measure do
-    s3_bucket.download_s3_file(s3_file, tmp_file)
-  end
+iterator = Alblogs::Iterator.new(s3_bucket, request_matcher.range, request_matcher)
+iterator.display_stats_proc = Proc.new do |stats|
+  stats[:elapsed_time] = Time.now.utc - stats[:started_at]
+  $stderr.puts stats.inspect
+end
 
-  stats[:total_file_processing_time] += measure do
-    File.open(tmp_file, 'rb') do |f|
-      while(! f.eof? && ! $stop)
-        stats[:lines] += 1
-        line = f.readline
-        entry = Alblogs::Entry.from_line(line)
-        stats[:min_log_time] = ! stats[:min_log_time] || stats[:min_log_time] > entry.timestamp ? entry.timestamp : stats[:min_log_time]
-        stats[:max_log_time] = ! stats[:max_log_time] || stats[:max_log_time] < entry.timestamp ? entry.timestamp : stats[:max_log_time]
-        next unless request_matcher.match?(entry)
-        stats[:matching_lines] += 1
-        stats[:min_matched_log_time] = ! stats[:min_matched_log_time] || stats[:min_matched_log_time] > entry.timestamp ? entry.timestamp : stats[:min_matched_log_time]
-        stats[:max_matched_log_time] = ! stats[:max_matched_log_time] || stats[:max_matched_log_time] < entry.timestamp ? entry.timestamp : stats[:max_matched_log_time]
-        options[:log_file].puts line
-      end
-    end
-  end
+trap("INT") { iterator.stop! }
 
-  File.unlink(tmp_file)
-
-  display_stats(stats) if options[:display_stats]
-  break if $stop
+iterator.each do |entry|
+  options[:log_file].puts entry.line
 end
 
 options[:log_file].close

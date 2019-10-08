@@ -1,5 +1,6 @@
 module Alblogs
   autoload :Entry, 'alblogs/entry'
+  autoload :Iterator, 'alblogs/iterator'
   autoload :RequestMatcher, 'alblogs/request_matcher'
   autoload :S3Bucket, 'alblogs/s3_bucket'
   autoload :S3File, 'alblogs/s3_file'
