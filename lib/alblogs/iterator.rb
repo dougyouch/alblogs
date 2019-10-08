@@ -30,7 +30,7 @@ module Alblogs
         end
 
         stats[:total_file_processing_time] += measure do
-          File.open(file, 'rb') do |f|
+          File.open(tmp_file, 'rb') do |f|
             ::Alblogs::Entry.each_entry(f) do |entry|
               break if @stop
 
