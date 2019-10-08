@@ -98,7 +98,7 @@ File.unlink("#{tmp_file}.gz") if File.exists?("#{tmp_file}.gz")
 $stop = false
 trap("INT") { $stop = true }
 
-s3_bucket = S3Bucket.new(options[:alb_s3_bucket], options[:aws_profile])
+s3_bucket = Alblogs::S3Bucket.new(options[:alb_s3_bucket], options[:aws_profile])
 s3_bucket.get_s3_files_in_range(request_matcher.range).values.each do |s3_file|
   stats[:files] += 1
 
