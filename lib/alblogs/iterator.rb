@@ -30,11 +30,11 @@ module Alblogs
         end
 
         stats[:total_file_processing_time] += measure do
-          File.open(tmp_file, 'rb') do |f|
-            while(! f.eof? && ! @stop)
-              stats[:lines] += 1
-              line = f.readline
-              entry = ::Alblogs::Entry.from_line(line)
+          File.open(file, 'rb') do |f|
+            ::Alblogs::Entry.each_entry(f) do |entry|
+              break if @stop
+
+              stats[:entries] += 1
               stats[:min_log_time] = ! stats[:min_log_time] || stats[:min_log_time] > entry.timestamp ? entry.timestamp : stats[:min_log_time]
               stats[:max_log_time] = ! stats[:max_log_time] || stats[:max_log_time] < entry.timestamp ? entry.timestamp : stats[:max_log_time]
               next if request_matcher && !request_matcher.match?(entry)

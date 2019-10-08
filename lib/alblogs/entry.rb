@@ -17,5 +17,11 @@ module Alblogs
     def self.get_fields(line)
       REGEXP.match(line).to_a
     end
+
+    def self.each_entry(io)
+      while !io.eof?
+        yield from_line(io.readline)
+      end
+    end
   end
 end
