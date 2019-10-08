@@ -20,7 +20,7 @@ end
 started_at = Time.now.utc
 
 options = {
-  start_time: time_ago(started_at, '30 min'),
+  start_time: Alblogs::Utils.time_ago(started_at, '30 min'),
   end_time: started_at,
   include_filter: nil,
   exclude_filter: nil,
@@ -34,11 +34,11 @@ OptionParser.new do |opts|
   opts.banner = "Usage: alblogs [options]"
 
   opts.on("-s", "--start=TIME_EXP", "Start time") do |v|
-    options[:start_time] = time_ago(started_at, v)
+    options[:start_time] = Alblogs::Utils.time_ago(started_at, v)
   end
 
   opts.on("-e", "--end=TIME_EXP", "End time") do |v|
-    options[:end_time] = time_ago(started_at, v)
+    options[:end_time] = Alblogs::Utils.time_ago(started_at, v)
   end
 
   opts.on("--include=REGEX", "Include filter") do |v|
