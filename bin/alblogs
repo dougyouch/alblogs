@@ -1,9 +1,6 @@
 #!/usr/bin/env ruby
 
 require 'optparse'
-require 'time'
-require 'shellwords'
-require 'json'
 require 'alblogs'
 
 started_at = Time.now.utc

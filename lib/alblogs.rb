@@ -1,3 +1,6 @@
+require 'time'
+require 'shellwords'
+
 module Alblogs
   autoload :Entry, 'alblogs/entry'
   autoload :Iterator, 'alblogs/iterator'
