@@ -1,20 +1,22 @@
 #!/usr/bin/env ruby
 
 require 'alblogs'
-require 'irb'
 
-log_file = ARGV[0] || raise('no log file specified')
-raise("#{log_file} not found") unless File.exist?(log_file)
+LOG_FILE = ARGV.shift || raise('no log file specified')
+raise("#{LOG_FILE} not found") unless File.exist?(LOG_FILE)
 
 class RequestStat
   attr_reader :method,
               :path,
               :num_requests,
               :num_failed_requests,
+              :num_successful_requests,
+              :successful_requests_total_time,
               :total_request_time,
               :max_request_time,
               :num_requests_over_a_second,
-              :response_codes
+              :response_codes,
+              :response_times
 
   def initialize(method, path)
     @method = method
@@ -26,13 +28,48 @@ class RequestStat
     @total_request_time / (@num_requests - @num_failed_requests)
   end
 
+  def average_successful_response_time
+    @num_successful_requests == 0 ? -1 : @successful_requests_total_time / @num_successful_requests
+  end
+
+  def num_500s
+    cnt = 0
+    @response_codes.each do |code, num_requests|
+      cnt += num_requests if code >= 500
+    end
+    cnt
+  end
+
+  def percentage_of_500s
+    num_500s.to_f / @num_requests.to_f
+  end
+
   def update(entry)
     @num_requests += 1
 
     if (request_time = entry.target_processing_time)
+      if entry.elb_status_code >= 200 && entry.elb_status_code < 300
+        @num_successful_requests += 1
+        @successful_requests_total_time += request_time
+      end
+
       @total_request_time += request_time
       @max_request_time = request_time if request_time > @max_request_time
       @num_requests_over_a_second += 1 if request_time >= 1.0
+
+      # break down requests times in buckets of 5 second intervals
+      if request_time < 1.0
+        @response_times['under_a_second'] += 1
+      elsif request_time < 2.0
+        @response_times['under_2_seconds'] += 1
+      elsif request_time < 5.0
+        @response_times['under_5_seconds'] += 1
+      elsif request_time < 10.0
+        @response_times['under_10_seconds'] += 1
+      else
+        @response_times['over_10_seconds'] += 1
+      end
+
     else
       @num_failed_requests += 1
     end
@@ -46,25 +83,58 @@ class RequestStat
     @total_request_time = 0.0
     @max_request_time = 0.0
     @num_requests_over_a_second = 0
+    @num_successful_requests = 0
+    @successful_requests_total_time = 0.0
     @response_codes = Hash.new(0)
+    @response_times = Hash.new(0)
   end
 end
 
 def normalize_path(entry)
-  entry.request_url.path.gsub(/\/\d+/, '/:id')
+  entry
+    .request_uri
+    .path
+    .gsub(/(remote_id|external)\/[^\/]+/, '\1/:id')
+    .gsub(/\/\d+/, '/:id')
 end
 
 def generate_stat_key(entry)
   "#{entry.request_method} #{normalize_path(entry)}"
 end
 
-stats = {}
+def get_stats
+  stats = {}
 
-File.open(log_file, 'rb') do |f|
-  Alblogs::Entry.each_entry(f) do |entry|
-    stat = (stats[generate_stat_key(entry)] ||= RequestStat.new(entry.request_method, normalize_path(entry)))
-    stat.update(entry)
+  File.open(LOG_FILE, 'rb') do |f|
+    Alblogs::Entry.each_entry(f) do |entry|
+      next if entry.request_method == 'OPTIONS'
+      stat = (stats[generate_stat_key(entry)] ||= RequestStat.new(entry.request_method, normalize_path(entry)))
+      stat.update(entry)
+    end
   end
+
+  stats
 end
 
-IRB.start(__FILE__)
+def top_x_request_that_take_over_a_second(stats, top=20)
+  stats.values.sort { |a, b| b.num_requests_over_a_second <=> a.num_requests_over_a_second }[0, top]
+end
+
+def top_x_requested_pages(stats, top=20)
+  stats.values.sort { |a, b| b.num_requests <=> a.num_requests }[0, top]
+end
+
+def top_x_requests_that_take_over(stats, over='over_10_seconds', top=20)
+  stats.values.sort { |a, b| b.response_times[over].to_i <=> a.response_times[over].to_i }[0, top]
+end
+
+def top_x_requests_that_have_500s(stats, top=20)
+  stats.values.sort { |a, b| b.num_500s <=> a.num_500s }[0, top]
+end
+
+def top_x_worst_routes(stats, top=20)
+  stats.values.sort { |a, b| b.percentage_of_500s <=> a.percentage_of_500s }[0, top]
+end
+
+require 'irb'
+IRB.start
