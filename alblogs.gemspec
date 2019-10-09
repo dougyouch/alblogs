@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |s|
   s.name        = 'alblogs'
-  s.version     = '0.1.4'
+  s.version     = '0.1.6'
   s.summary     = 'ALB access log processing'
   s.description = 'Utility script for processing ALB access logs over a given time range'
   s.authors     = ['Doug Youch']

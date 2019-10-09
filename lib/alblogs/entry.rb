@@ -26,8 +26,10 @@ module Alblogs
       @timestamp ||= Time.iso8601(self[:timestamp])
     end
 
+    # target_processing_time is in seconds with with millisecond precision
+    # -1 means target or server close connection or timed out
     def target_processing_time
-      self[:target_processing_time].to_f
+      self[:target_processing_time] == '-1' ? nil : self[:target_processing_time].to_f
     end
 
     # this is the response code the client received

@@ -1,0 +1,70 @@
+#!/usr/bin/env ruby
+
+require 'alblogs'
+require 'irb'
+
+log_file = ARGV[0] || raise('no log file specified')
+raise("#{log_file} not found") unless File.exist?(log_file)
+
+class RequestStat
+  attr_reader :method,
+              :path,
+              :num_requests,
+              :num_failed_requests,
+              :total_request_time,
+              :max_request_time,
+              :num_requests_over_a_second,
+              :response_codes
+
+  def initialize(method, path)
+    @method = method
+    @path = path
+    reset
+  end
+
+  def average_response_time
+    @total_request_time / (@num_requests - @num_failed_requests)
+  end
+
+  def update(entry)
+    @num_requests += 1
+
+    if (request_time = entry.target_processing_time)
+      @total_request_time += request_time
+      @max_request_time = request_time if request_time > @max_request_time
+      @num_requests_over_a_second += 1 if request_time >= 1.0
+    else
+      @num_failed_requests += 1
+    end
+
+    @response_codes[entry.elb_status_code] += 1
+  end
+
+  def reset
+    @num_requests = 0
+    @num_failed_requests = 0
+    @total_request_time = 0.0
+    @max_request_time = 0.0
+    @num_requests_over_a_second = 0
+    @response_codes = Hash.new(0)
+  end
+end
+
+def normalize_path(entry)
+  entry.request_url.path.gsub(/\/\d+/, '/:id')
+end
+
+def generate_stat_key(entry)
+  "#{entry.request_method} #{normalize_path(entry)}"
+end
+
+stats = {}
+
+File.open(log_file, 'rb') do |f|
+  Alblogs::Entry.each_entry(f) do |entry|
+    stat = (stats[generate_stat_key(entry)] ||= RequestStat.new(entry.request_method, normalize_path(entry)))
+    stat.update(entry)
+  end
+end
+
+IRB.start(__FILE__)
