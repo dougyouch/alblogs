@@ -1,0 +1,38 @@
+#!/usr/bin/env ruby
+
+# Purpose: to pretty print ALB log entries
+
+require 'optparse'
+require 'alblogs'
+require 'json'
+require 'csv'
+
+options = {
+  format: 'vertical'
+}
+OptionParser.new do |opts|
+  opts.banner = "Usage: alblogpp [options]"
+
+  opts.on("-f", "--format=FORMAT", "Output format vertical, json, csv") do |v|
+    options[:format] = v
+  end
+end.parse!
+
+if options[:format] == 'csv'
+  print Alblogs::Entry.members.to_csv
+end
+
+Alblogs::Entry.each_entry($stdin) do |entry|
+  case options[:format]
+  when 'csv'
+    print entry.values.to_csv
+  when 'json'
+    data = Hash[Alblogs::Entry.members.zip(entry.values)]
+    print data.to_json + "\n"
+  else
+    data = Hash[Alblogs::Entry.members.zip(entry.values)]
+    data.each do |key, value|
+      puts "#{key}: #{value}"
+    end
+  end
+end
