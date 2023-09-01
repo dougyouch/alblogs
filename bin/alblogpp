@@ -13,25 +13,25 @@ options = {
 OptionParser.new do |opts|
   opts.banner = "Usage: alblogpp [options]"
 
-  opts.on("-f", "--format=FORMAT", "Output format vertical, json, csv") do |v|
+  opts.on("-f", "--format=FORMAT", "Output format vertical, json, csv, jsonl") do |v|
     options[:format] = v
   end
 end.parse!
 
 if options[:format] == 'csv'
-  print Alblogs::Entry.members.to_csv
+  print Alblogs::Entry.fields.to_csv
 end
 
 Alblogs::Entry.each_entry($stdin) do |entry|
   case options[:format]
   when 'csv'
-    print entry.values.to_csv
+    print entry.to_a.to_csv
   when 'json'
-    data = Hash[Alblogs::Entry.members.zip(entry.values)]
-    print data.to_json + "\n"
+    print JSON.pretty_generate(entry.to_h) + "\n"
+  when 'jsonl'
+    print entry.to_h.to_json + "\n"
   else
-    data = Hash[Alblogs::Entry.members.zip(entry.values)]
-    data.each do |key, value|
+    entry.to_h.each do |key, value|
       puts "#{key}: #{value}"
     end
   end

@@ -2,6 +2,10 @@ module Alblogs
   class Entry < Struct.new(:line, *::Alblogs::FIELDS.keys)
     REGEXP = Regexp.new(::Alblogs::FIELDS.values.join(' '))
 
+    def self.fields
+      ::Alblogs::FIELDS.keys
+    end
+
     def request_parts
       @request_parts ||= request.split(' ', 3)
     end
@@ -24,6 +28,14 @@ module Alblogs
 
     def timestamp
       @timestamp ||= Time.iso8601(self[:timestamp])
+    end
+
+    def to_a
+      ::Alblogs::FIELDS.keys.map { |k| send(k) }
+    end
+
+    def to_h
+      Hash[::Alblogs::FIELDS.keys.zip(to_a)]
     end
 
     # target_processing_time is in seconds with with millisecond precision
