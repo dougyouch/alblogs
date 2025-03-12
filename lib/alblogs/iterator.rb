@@ -70,8 +70,8 @@ module Alblogs
     end
 
     def delete_tmp_file
-      File.unlink(tmp_file) if File.exists?(tmp_file)
-      File.unlink("#{tmp_file}.gz") if File.exists?("#{tmp_file}.gz")
+      File.unlink(tmp_file) if File.exist?(tmp_file)
+      File.unlink("#{tmp_file}.gz") if File.exist?("#{tmp_file}.gz")
     end
 
     def init_stats
